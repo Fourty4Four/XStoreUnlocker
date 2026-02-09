@@ -2,10 +2,6 @@
 
 DLC unlocker for Microsoft Store and Xbox PC games. Works on any game that uses the Xbox GDK (XGameRuntime.dll).
 
-## Background
-
-For whatever reason no one bothered with making a DLC unlocker for MS Store. Steam has CreamAPI and Koalageddon. Epic has ScreamAPI. So I made my own. Proxy DLL that hooks the XStore COM vtable in xgameruntime.dll to force ownership on all products and license checks.
-
 ## Install
 
 You need three files in your game folder:
