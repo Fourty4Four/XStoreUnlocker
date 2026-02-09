@@ -1,6 +1,6 @@
 # XStoreUnlocker
 
-DLC unlocker for Microsoft Store and Xbox PC games. Works on any game that uses the Xbox GDK (XGameRuntime.dll).
+DLC unlocker for Microsoft Store and Xbox PC games. Works on any game that uses the Xbox GDK (XGameRuntime.dll) by Zephkek.
 
 ## Install
 
