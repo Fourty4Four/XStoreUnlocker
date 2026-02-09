@@ -96,7 +96,3 @@ Output: `build/Release/XGameRuntime.dll`
 ## Legal
 
 This software is provided for educational and research purposes only. Use it at your own risk. The author is not responsible for any consequences of using this tool. Do not use this tool to obtain content you do not have the right to access. Support the developers by purchasing games and DLCs.
-
-## License
-
-MIT
