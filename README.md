@@ -65,10 +65,6 @@ Get Store IDs from [dbox.tools](https://dbox.tools) by searching for your game.
 9PNB6L2L9RW8=1
 ```
 
-### Game-Specific Configs
-
-Pre-made configs for tested games are in the `configs/` folder. Copy the contents into your `xstore_unlocker.ini`.
-
 ## Tested Games
 
 | Game | Status | Notes |
