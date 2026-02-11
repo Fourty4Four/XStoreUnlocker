@@ -8,7 +8,7 @@ static void WriteDefaultConfig(const std::string& path) {
     if (hFile == INVALID_HANDLE_VALUE) return;
 
     const char content[] =
-        "; XStoreAPI Unlocker v2.0.0\r\n"
+        "; XStoreAPI Unlocker v2.0.1\r\n"
         "; By ZephKek\r\n"
         "; Drop this file next to XGameRuntime.dll in the game folder.\r\n"
         "\r\n"

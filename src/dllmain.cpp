@@ -1,5 +1,5 @@
-// XStoreAPI Unlocker v2.0.0 - By ZephKek
-// XGameRuntime.dll proxy. Rename original to XGameRuntime_o.dll.
+// XStoreAPI Unlocker v2.0.1
+// xgameruntime.dll proxy. rename original to XGameRuntime_o.dll
 
 #include "proxy.h"
 #include "store_hooks.h"
@@ -31,7 +31,6 @@ extern "C" __declspec(dllexport) HRESULT __cdecl QueryApiImpl(
 
     if (SUCCEEDED(hr) && ppInterface && *ppInterface) {
         if (GuidsEqual(providerGuid, &XSTORE_PROVIDER_GUID)) {
-            LOG_INFO("Store provider created at %p", *ppInterface);
             StoreHooks::OnStoreInterfaceCreated(ppInterface);
         }
     }
@@ -41,17 +40,20 @@ extern "C" __declspec(dllexport) HRESULT __cdecl QueryApiImpl(
 
 extern "C" __declspec(dllexport) HRESULT __cdecl InitializeApiImpl(uint64_t a1, uint64_t a2) {
     if (!Proxy::EnsureInitialized()) return E_FAIL;
-    return Proxy::GetReal_InitializeApiImpl()(a1, a2);
+    auto fn = Proxy::GetReal_InitializeApiImpl();
+    return fn ? fn(a1, a2) : E_NOTIMPL;
 }
 
 extern "C" __declspec(dllexport) HRESULT __cdecl InitializeApiImplEx(uint64_t a1, uint64_t a2, int64_t a3) {
     if (!Proxy::EnsureInitialized()) return E_FAIL;
-    return Proxy::GetReal_InitializeApiImplEx()(a1, a2, a3);
+    auto fn = Proxy::GetReal_InitializeApiImplEx();
+    return fn ? fn(a1, a2, a3) : E_NOTIMPL;
 }
 
 extern "C" __declspec(dllexport) HRESULT __cdecl InitializeApiImplEx2(uint64_t a1, uint64_t a2, int64_t a3, int64_t a4) {
     if (!Proxy::EnsureInitialized()) return E_FAIL;
-    return Proxy::GetReal_InitializeApiImplEx2()(a1, a2, a3, a4);
+    auto fn = Proxy::GetReal_InitializeApiImplEx2();
+    return fn ? fn(a1, a2, a3, a4) : E_NOTIMPL;
 }
 
 extern "C" __declspec(dllexport) HRESULT __cdecl UninitializeApiImpl() {
@@ -82,7 +84,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved) {
         std::string dir = GetDllDirectory();
 
         Logger::Instance().Init(dir + "\\xstore_unlocker.log");
-        LOG_INFO("XStoreAPI Unlocker v2.0.0");
+        LOG_INFO("XStoreAPI Unlocker v2.0.1");
 
         g_config = LoadConfig(dir + "\\xstore_unlocker.ini");
         Logger::Instance().SetEnabled(g_config.logEnabled);
@@ -94,7 +96,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved) {
         break;
     }
     case DLL_PROCESS_DETACH:
-        Proxy::Shutdown();
+        StoreHooks::Shutdown();
+        Proxy::Shutdown(lpReserved != nullptr);
         break;
     }
 

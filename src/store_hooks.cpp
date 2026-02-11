@@ -1,215 +1,321 @@
-// XStore vtable hooks. By ZephKek.
-// Offsets from IDA analysis of xgameruntime.dll storeimpl.
+// XStore vtable hooks for xgameruntime.dll
+// offsets verified in IDA (md5 e0c40ce5efb4a3cd8e7b0058e35399a9)
 
 #include "store_hooks.h"
 #include "proxy.h"
 #include "logger.h"
+#include <atomic>
 #include <cstring>
-#include <mutex>
 #include <unordered_set>
 #include <string>
 #include <vector>
+#include <memory>
 
 static UnlockerConfig g_cfg;
-static VtableEntry_t g_orig[STORE_VTABLE_SIZE] = {};
-static std::mutex g_mtx;
+static VtableEntry_t  g_orig[STORE_VTABLE_SIZE] = {};
+static SRWLOCK        g_hookLock  = SRWLOCK_INIT;
+static SRWLOCK        g_fakesLock = SRWLOCK_INIT;
+static VtableEntry_t* g_hookedVtable = nullptr;
+static std::atomic<bool> g_shutdown{false};
 
-constexpr size_t STRIDE              = 208;  // product struct size
-constexpr size_t OFF_ID              = 0;    // char* storeId
-constexpr size_t OFF_TITLE           = 8;    // char* title
-constexpr size_t OFF_OWNED           = 145;  // byte isInUserCollection
-constexpr size_t OFF_VALID           = 4;    // license handle isValid
-constexpr size_t OFF_ARR_START       = 24;   // query handle array begin
-constexpr size_t OFF_ARR_END         = 32;   // query handle array end
-constexpr size_t OFF_CAN_ACQUIRE_STATUS  = 64;  // {storeId[64]; status}
-constexpr size_t OFF_GAME_LICENSE_ACTIVE = 64;  // {skuStoreId[64]; isActive}
-constexpr uint32_t LICENSE_STATUS_ACTIVE = 0;
+// XStoreProduct (208 bytes, sub_1800DABC0)
+constexpr size_t STRIDE        = 208;
+constexpr size_t OFF_ID        = 0;     // char*
+constexpr size_t OFF_TITLE     = 8;     // char*
+constexpr size_t OFF_DESC      = 16;    // char*
+constexpr size_t OFF_LANG      = 24;    // char*
+constexpr size_t OFF_OFFER     = 32;    // char*
+constexpr size_t OFF_LINK      = 40;    // char*
+constexpr size_t OFF_KIND      = 48;    // uint32 XStoreProductKind
+constexpr size_t OFF_CURRENCY  = 72;    // char* (XStorePrice at +56)
+constexpr size_t OFF_FMT_BASE  = 80;    // char[16] inline
+constexpr size_t OFF_FMT_PRICE = 96;    // char[16] inline
+constexpr size_t OFF_FMT_REC   = 112;   // char[16] inline
+constexpr size_t OFF_HAS_DL    = 144;   // bool hasDigitalDownload
+constexpr size_t OFF_OWNED     = 145;   // bool isInUserCollection
+
+constexpr size_t OFF_LICENSE_VALID      = 4;   // byte in license handle (sub_1800DEAB0)
+constexpr size_t OFF_ARR_START          = 24;  // query handle: array base
+constexpr size_t OFF_ARR_END            = 32;  // query handle: array end
+constexpr size_t OFF_CAN_ACQUIRE_STATUS = 8;   // uint32 in XStoreCanAcquireLicenseResult
+constexpr size_t OFF_GAME_LICENSE_ACTIVE = 18;  // bool in XStoreGameLicense
+constexpr size_t OFF_ADDON_IS_ACTIVE    = 82;   // bool in XStoreAddonLicense
 
 typedef int64_t(__fastcall* Fn2)(void*, void*);
 typedef int64_t(__fastcall* Fn3)(void*, void*, void*);
 typedef int64_t(__fastcall* Fn4)(void*, void*, void*, void*);
-typedef uint8_t(__fastcall* ProductCb_t)(void* product, void* context);
+typedef uint8_t(__fastcall* ProductCb_t)(void*, void*);
 
-// Persistent storage for injected product strings so pointers stay valid
-static std::vector<std::string> g_injectedIds;
-static bool g_injectedOnce = false;
+// all string pointers point to static storage or std::string members
+// so they stay valid for the process lifetime
+struct FakeProduct {
+    std::string storeId;
+    std::unique_ptr<uint8_t[]> data;
 
-// vt[15] GetProducts - patch real products, inject fake ones for [DLCs] IDs
+    FakeProduct(const std::string& id)
+        : storeId(id)
+        , data(std::make_unique<uint8_t[]>(STRIDE))
+    {
+        memset(data.get(), 0, STRIDE);
+        uint8_t* p = data.get();
+
+        *(const char**)(p + OFF_ID)       = storeId.c_str();
+        *(const char**)(p + OFF_TITLE)    = storeId.c_str();
+        *(const char**)(p + OFF_DESC)     = "";
+        *(const char**)(p + OFF_LANG)     = "en-US";
+        *(const char**)(p + OFF_OFFER)    = "";
+        *(const char**)(p + OFF_LINK)     = "";
+        *(uint32_t*)(p + OFF_KIND)        = PRODUCT_KIND_DURABLE;
+        *(const char**)(p + OFF_CURRENCY) = "USD";
+        strncpy((char*)(p + OFF_FMT_BASE),  "$0.00", PRICE_MAX_SIZE);
+        strncpy((char*)(p + OFF_FMT_PRICE), "$0.00", PRICE_MAX_SIZE);
+        strncpy((char*)(p + OFF_FMT_REC),   "$0.00", PRICE_MAX_SIZE);
+        p[OFF_HAS_DL] = 1;
+        p[OFF_OWNED] = 1;
+    }
+
+    FakeProduct(const FakeProduct&) = delete;
+    FakeProduct& operator=(const FakeProduct&) = delete;
+};
+
+static std::vector<std::unique_ptr<FakeProduct>> g_fakeProducts;
+static std::atomic<bool> g_fakesBuilt{false};
+
+// global dedup: real IDs + injected fake IDs across all queries
+static std::unordered_set<std::string> g_seenIds;
+static SRWLOCK g_seenLock = SRWLOCK_INIT;
+
+static void BuildFakeProducts() {
+    if (g_fakesBuilt) return;
+    AcquireSRWLockExclusive(&g_fakesLock);
+    if (!g_fakesBuilt) {
+        for (const auto& id : g_cfg.dlcs) {
+            if (g_cfg.blacklist.count(id)) continue;
+            g_fakeProducts.push_back(std::make_unique<FakeProduct>(id));
+        }
+        g_fakesBuilt = true;
+        LOG_INFO("built %zu fake products", g_fakeProducts.size());
+    }
+    ReleaseSRWLockExclusive(&g_fakesLock);
+}
+
+// vt[15]: patch owned flag on real products, inject fakes for missing DLC IDs
 static int64_t __fastcall Hook_GetProducts(void* self, void* qh, void* ctx, void* cb) {
-    std::unordered_set<std::string> seen;
+    if (g_shutdown) return ((Fn4)g_orig[StoreVtable::ProductsQueryGetProducts])(self, qh, ctx, cb);
+    std::unordered_set<std::string> localSeen;
     int total = 0, patched = 0;
 
     if (qh) {
-        uint8_t* base = *(uint8_t**)((uint8_t*)qh + OFF_ARR_START);
-        uint8_t* end  = *(uint8_t**)((uint8_t*)qh + OFF_ARR_END);
+        auto* base = *(uint8_t**)((uint8_t*)qh + OFF_ARR_START);
+        auto* end  = *(uint8_t**)((uint8_t*)qh + OFF_ARR_END);
 
-        for (uint8_t* p = base; p < end; p += STRIDE) {
+        for (uint8_t* p = base; base && p < end; p += STRIDE) {
             total++;
             const char* id    = *(const char**)(p + OFF_ID);
             const char* title = *(const char**)(p + OFF_TITLE);
+            if (id) localSeen.insert(id);
+            if (id && g_cfg.blacklist.count(id)) continue;
 
-            if (id) seen.insert(id);
-
-            if (id && g_cfg.blacklist.count(id)) {
-                LOG_INFO("[SKIP] '%s' (%s) blacklisted", title ? title : "", id);
-                continue;
-            }
-
-            bool shouldOwn = g_cfg.unlockAll || (id && g_cfg.dlcs.count(id));
-            if (shouldOwn && !p[OFF_OWNED]) {
+            if ((g_cfg.unlockAll || (id && g_cfg.dlcs.count(id))) && !p[OFF_OWNED]) {
                 p[OFF_OWNED] = 1;
                 patched++;
-                LOG_INFO("[PATCH] '%s' (%s) set to owned", title ? title : "", id ? id : "");
+                LOG_INFO("[PATCH] '%s' (%s)", title ? title : "", id ? id : "");
             }
         }
-
-        LOG_INFO("GetProducts: %d total, %d patched", total, patched);
+        LOG_INFO("GetProducts: %d real, %d patched", total, patched);
     }
 
-    // Call original - delivers real products to game via callback
-    int64_t hr = ((Fn4)g_orig[15])(self, qh, ctx, cb);
+    int64_t hr = ((Fn4)g_orig[StoreVtable::ProductsQueryGetProducts])(self, qh, ctx, cb);
 
-    // Inject fake products for [DLCs] IDs not in real results
     if (hr == 0 && cb && !g_cfg.dlcs.empty()) {
+        BuildFakeProducts();
+
+        // collect fakes to inject under lock, call game callback after releasing
+        std::vector<uint8_t*> pending;
+
+        AcquireSRWLockExclusive(&g_seenLock);
+        for (const auto& id : localSeen)
+            g_seenIds.insert(id);
+        AcquireSRWLockShared(&g_fakesLock);
+        for (const auto& fake : g_fakeProducts) {
+            if (g_seenIds.count(fake->storeId)) continue;
+            g_seenIds.insert(fake->storeId);
+            pending.push_back(fake->data.get());
+        }
+        ReleaseSRWLockShared(&g_fakesLock);
+        ReleaseSRWLockExclusive(&g_seenLock);
+
         auto callback = (ProductCb_t)cb;
-        int injected = 0;
+        for (auto* p : pending)
+            if (!callback(p, ctx)) break;
 
-        // Build persistent ID storage on first call
-        if (!g_injectedOnce) {
-            for (const auto& id : g_cfg.dlcs) {
-                g_injectedIds.push_back(id);
-            }
-            g_injectedOnce = true;
-        }
-
-        for (const auto& id : g_injectedIds) {
-            if (seen.count(id)) continue;
-            if (g_cfg.blacklist.count(id)) continue;
-
-            uint8_t fake[STRIDE] = {};
-            *(const char**)(fake + OFF_ID)    = id.c_str();
-            *(const char**)(fake + OFF_TITLE) = id.c_str();
-            fake[OFF_OWNED] = 1;
-
-            callback(fake, ctx);
-            injected++;
-            LOG_INFO("[INJECT] %s injected as owned", id.c_str());
-        }
-
-        if (injected > 0) {
-            LOG_INFO("Injected %d unlisted products", injected);
-        }
+        if (!pending.empty())
+            LOG_INFO("injected %zu fake products", pending.size());
     }
 
     return hr;
 }
 
-// vt[22] LicenseIsValid - always true
+// vt[22]: force license valid
 static int64_t __fastcall Hook_LicenseIsValid(void* self, void* handle) {
-    ((Fn2)g_orig[22])(self, handle);
+    if (g_shutdown) return ((Fn2)g_orig[StoreVtable::LicenseIsValid])(self, handle);
+    ((Fn2)g_orig[StoreVtable::LicenseIsValid])(self, handle);
     return 1;
 }
 
-// vt[21] PackageLicenseResult - force isValid
+// vt[21]: force package license handle valid
 static int64_t __fastcall Hook_PackageLicenseResult(void* self, void* async, void** out) {
-    int64_t hr = ((Fn3)g_orig[21])(self, async, out);
+    if (g_shutdown) return ((Fn3)g_orig[StoreVtable::AcquireLicenseForPackageResult])(self, async, out);
+    int64_t hr = ((Fn3)g_orig[StoreVtable::AcquireLicenseForPackageResult])(self, async, out);
     if (hr == 0 && out && *out) {
-        ((uint8_t*)*out)[OFF_VALID] = 1;
-        LOG_INFO("PackageLicenseResult: handle=%p forced valid", *out);
+        ((uint8_t*)*out)[OFF_LICENSE_VALID] = 1;
+        LOG_INFO("PackageLicenseResult: forced valid");
     }
     return hr;
 }
 
-// vt[72] DurablesLicenseResult - force isValid
+// vt[72]: force durables license handle valid
 static int64_t __fastcall Hook_DurablesLicenseResult(void* self, void* async, void** out) {
-    int64_t hr = ((Fn3)g_orig[72])(self, async, out);
+    if (g_shutdown) return ((Fn3)g_orig[StoreVtable::AcquireLicenseForDurablesResult])(self, async, out);
+    int64_t hr = ((Fn3)g_orig[StoreVtable::AcquireLicenseForDurablesResult])(self, async, out);
     if (hr == 0 && out && *out) {
-        ((uint8_t*)*out)[OFF_VALID] = 1;
-        LOG_INFO("DurablesLicenseResult: handle=%p forced valid", *out);
+        ((uint8_t*)*out)[OFF_LICENSE_VALID] = 1;
+        LOG_INFO("DurablesLicenseResult: forced valid");
     }
     return hr;
 }
 
-// vt[25] CanAcquireLicenseForStoreIdResult - force Active
-static int64_t __fastcall Hook_CanAcquireForStoreIdResult(void* self, void* async, void* out) {
-    int64_t hr = ((Fn3)g_orig[25])(self, async, out);
-    if (hr == 0 && out) {
-        *(uint32_t*)((uint8_t*)out + OFF_CAN_ACQUIRE_STATUS) = LICENSE_STATUS_ACTIVE;
-        LOG_INFO("CanAcquireLicenseForStoreId: forced Active");
-    }
+// vt[25]: force can-acquire status active
+static int64_t __fastcall Hook_CanAcquireStoreIdResult(void* self, void* async, void* out) {
+    if (g_shutdown) return ((Fn3)g_orig[StoreVtable::CanAcquireLicenseForStoreIdResult])(self, async, out);
+    int64_t hr = ((Fn3)g_orig[StoreVtable::CanAcquireLicenseForStoreIdResult])(self, async, out);
+    if (hr == 0 && out)
+        *(uint32_t*)((uint8_t*)out + OFF_CAN_ACQUIRE_STATUS) = 0;
     return hr;
 }
 
-// vt[27] CanAcquireLicenseForPackageResult - force Active
-static int64_t __fastcall Hook_CanAcquireForPackageResult(void* self, void* async, void* out) {
-    int64_t hr = ((Fn3)g_orig[27])(self, async, out);
-    if (hr == 0 && out) {
-        *(uint32_t*)((uint8_t*)out + OFF_CAN_ACQUIRE_STATUS) = LICENSE_STATUS_ACTIVE;
-        LOG_INFO("CanAcquireLicenseForPackage: forced Active");
-    }
+// vt[27]: force can-acquire status active
+static int64_t __fastcall Hook_CanAcquirePackageResult(void* self, void* async, void* out) {
+    if (g_shutdown) return ((Fn3)g_orig[StoreVtable::CanAcquireLicenseForPackageResult])(self, async, out);
+    int64_t hr = ((Fn3)g_orig[StoreVtable::CanAcquireLicenseForPackageResult])(self, async, out);
+    if (hr == 0 && out)
+        *(uint32_t*)((uint8_t*)out + OFF_CAN_ACQUIRE_STATUS) = 0;
     return hr;
 }
 
-// vt[29] GameLicenseResult - force isActive
+// vt[29]: force game license active, clear trial
 static int64_t __fastcall Hook_GameLicenseResult(void* self, void* async, void* out) {
-    int64_t hr = ((Fn3)g_orig[29])(self, async, out);
+    if (g_shutdown) return ((Fn3)g_orig[StoreVtable::QueryGameLicenseResult])(self, async, out);
+    int64_t hr = ((Fn3)g_orig[StoreVtable::QueryGameLicenseResult])(self, async, out);
     if (hr == 0 && out) {
-        ((uint8_t*)out)[OFF_GAME_LICENSE_ACTIVE] = 1;
-        LOG_INFO("QueryGameLicenseResult: forced isActive=true");
+        auto* p = (uint8_t*)out;
+        p[OFF_GAME_LICENSE_ACTIVE]     = 1; // isActive
+        p[OFF_GAME_LICENSE_ACTIVE + 1] = 1; // isTrialOwnedByThisUser
+        p[OFF_GAME_LICENSE_ACTIVE + 2] = 0; // isDiscLicense
+        p[OFF_GAME_LICENSE_ACTIVE + 3] = 0; // isTrial
+        LOG_INFO("GameLicense: forced active");
     }
     return hr;
 }
 
-// vt[20] PackageLicenseAsync - log only
-static int64_t __fastcall Hook_PackageLicenseAsync(void* self, void* ctx, void* pkg, void* async) {
-    LOG_INFO("AcquireLicenseForPackage: '%s'", pkg ? (const char*)pkg : "");
-    return ((Fn4)g_orig[20])(self, ctx, pkg, async);
+// vt[31]: log addon count
+static int64_t __fastcall Hook_AddOnLicensesResult(void* self, void* async, uint32_t* count) {
+    if (g_shutdown) return ((Fn3)g_orig[StoreVtable::QueryAddOnLicensesResult])(self, async, count);
+    int64_t hr = ((Fn3)g_orig[StoreVtable::QueryAddOnLicensesResult])(self, async, count);
+    if (hr == 0 && count)
+        LOG_INFO("AddOnLicenses: %u", *count);
+    return hr;
 }
 
-// vt[71] DurablesLicenseAsync - log only
+// vt[32]: force addon license active
+static int64_t __fastcall Hook_AddOnLicensesGetResult(void* self, void* async, uint32_t idx, void* out) {
+    if (g_shutdown) return ((Fn4)g_orig[StoreVtable::QueryAddOnLicensesGetResult])(self, async, (void*)(uintptr_t)idx, out);
+    int64_t hr = ((Fn4)g_orig[StoreVtable::QueryAddOnLicensesGetResult])(self, async, (void*)(uintptr_t)idx, out);
+    if (hr == 0 && out) {
+        auto* p = (uint8_t*)out;
+        // skuStoreId at +0 format "productId/skuId"
+        std::string compound((const char*)p);
+        auto slash = compound.find('/');
+        std::string productId = (slash != std::string::npos) ? compound.substr(0, slash) : compound;
+        if (!productId.empty() && g_cfg.blacklist.count(productId)) {
+            LOG_INFO("[SKIP] Addon[%u] '%s'", idx, compound.c_str());
+        } else if (g_cfg.unlockAll || (!productId.empty() && g_cfg.dlcs.count(productId))) {
+            p[OFF_ADDON_IS_ACTIVE] = 1;
+            LOG_INFO("[PATCH] Addon[%u] '%s'", idx, compound.c_str());
+        }
+    }
+    return hr;
+}
+
+// vt[20]: log package license request
+static int64_t __fastcall Hook_PackageLicenseAsync(void* self, void* ctx, void* pkg, void* async) {
+    if (g_shutdown) return ((Fn4)g_orig[StoreVtable::AcquireLicenseForPackageAsync])(self, ctx, pkg, async);
+    LOG_INFO("AcquireLicenseForPackage: '%s'", pkg ? (const char*)pkg : "");
+    return ((Fn4)g_orig[StoreVtable::AcquireLicenseForPackageAsync])(self, ctx, pkg, async);
+}
+
+// vt[71]: log durables license request
 static int64_t __fastcall Hook_DurablesLicenseAsync(void* self, void* ctx, void* id, void* async) {
+    if (g_shutdown) return ((Fn4)g_orig[StoreVtable::AcquireLicenseForDurablesAsync])(self, ctx, id, async);
     LOG_INFO("AcquireLicenseForDurables: '%s'", id ? (const char*)id : "");
-    return ((Fn4)g_orig[71])(self, ctx, id, async);
+    return ((Fn4)g_orig[StoreVtable::AcquireLicenseForDurablesAsync])(self, ctx, id, async);
 }
 
 void StoreHooks::Initialize(const UnlockerConfig& cfg) {
     g_cfg = cfg;
-    LOG_INFO("Hooks ready. unlock_all=%d", cfg.unlockAll);
+    LOG_INFO("StoreHooks: unlock_all=%d, %zu dlcs, %zu blacklisted",
+             cfg.unlockAll, cfg.dlcs.size(), cfg.blacklist.size());
+}
+
+static void InstallHooks(VtableEntry_t* vt) {
+    memcpy(g_orig, vt, sizeof(VtableEntry_t) * STORE_VTABLE_SIZE);
+
+    DWORD old;
+    if (!VirtualProtect(vt, sizeof(VtableEntry_t) * STORE_VTABLE_SIZE, PAGE_READWRITE, &old)) {
+        LOG_ERROR("VirtualProtect failed: %lu", GetLastError());
+        return;
+    }
+
+    vt[StoreVtable::ProductsQueryGetProducts]           = (VtableEntry_t)&Hook_GetProducts;
+    vt[StoreVtable::AcquireLicenseForPackageAsync]      = (VtableEntry_t)&Hook_PackageLicenseAsync;
+    vt[StoreVtable::AcquireLicenseForPackageResult]     = (VtableEntry_t)&Hook_PackageLicenseResult;
+    vt[StoreVtable::LicenseIsValid]                     = (VtableEntry_t)&Hook_LicenseIsValid;
+    vt[StoreVtable::AcquireLicenseForDurablesAsync]     = (VtableEntry_t)&Hook_DurablesLicenseAsync;
+    vt[StoreVtable::AcquireLicenseForDurablesResult]    = (VtableEntry_t)&Hook_DurablesLicenseResult;
+    vt[StoreVtable::CanAcquireLicenseForStoreIdResult]  = (VtableEntry_t)&Hook_CanAcquireStoreIdResult;
+    vt[StoreVtable::CanAcquireLicenseForPackageResult]  = (VtableEntry_t)&Hook_CanAcquirePackageResult;
+    vt[StoreVtable::QueryGameLicenseResult]             = (VtableEntry_t)&Hook_GameLicenseResult;
+    vt[StoreVtable::QueryAddOnLicensesResult]           = (VtableEntry_t)&Hook_AddOnLicensesResult;
+    vt[StoreVtable::QueryAddOnLicensesGetResult]        = (VtableEntry_t)&Hook_AddOnLicensesGetResult;
+
+    VirtualProtect(vt, sizeof(VtableEntry_t) * STORE_VTABLE_SIZE, old, &old);
+    g_hookedVtable = vt;
+    LOG_INFO("hooks installed on vtable %p", vt);
+}
+
+void StoreHooks::Shutdown() {
+    g_shutdown = true;
+    AcquireSRWLockExclusive(&g_hookLock);
+    if (g_hookedVtable) {
+        DWORD old;
+        if (VirtualProtect(g_hookedVtable, sizeof(VtableEntry_t) * STORE_VTABLE_SIZE, PAGE_READWRITE, &old)) {
+            memcpy(g_hookedVtable, g_orig, sizeof(VtableEntry_t) * STORE_VTABLE_SIZE);
+            VirtualProtect(g_hookedVtable, sizeof(VtableEntry_t) * STORE_VTABLE_SIZE, old, &old);
+        }
+        g_hookedVtable = nullptr;
+    }
+    ReleaseSRWLockExclusive(&g_hookLock);
 }
 
 void StoreHooks::OnStoreInterfaceCreated(void** ppInterface) {
     if (!ppInterface || !*ppInterface) return;
 
-    std::lock_guard<std::mutex> lock(g_mtx);
-
-    static bool s_done = false;
-    if (s_done) return;
-    s_done = true;
-
-    void* obj = *ppInterface;
-    VtableEntry_t* vt = *(VtableEntry_t**)obj;
-
-    LOG_INFO("Store vtable at %p. Installing hooks.", vt);
-
-    memcpy(g_orig, vt, sizeof(VtableEntry_t) * STORE_VTABLE_SIZE);
-
-    DWORD old;
-    if (!VirtualProtect(vt, sizeof(VtableEntry_t) * STORE_VTABLE_SIZE, PAGE_READWRITE, &old)) {
-        LOG_ERROR("VirtualProtect failed (err=%lu)", GetLastError());
-        return;
+    AcquireSRWLockExclusive(&g_hookLock);
+    auto* vt = *(VtableEntry_t**)*ppInterface;
+    if (vt != g_hookedVtable) {
+        if (g_hookedVtable)
+            LOG_INFO("vtable changed %p -> %p, re-hooking", g_hookedVtable, vt);
+        InstallHooks(vt);
     }
-
-    vt[15] = (VtableEntry_t)&Hook_GetProducts;
-    vt[20] = (VtableEntry_t)&Hook_PackageLicenseAsync;
-    vt[21] = (VtableEntry_t)&Hook_PackageLicenseResult;
-    vt[22] = (VtableEntry_t)&Hook_LicenseIsValid;
-    vt[25] = (VtableEntry_t)&Hook_CanAcquireForStoreIdResult;
-    vt[27] = (VtableEntry_t)&Hook_CanAcquireForPackageResult;
-    vt[29] = (VtableEntry_t)&Hook_GameLicenseResult;
-    vt[71] = (VtableEntry_t)&Hook_DurablesLicenseAsync;
-    vt[72] = (VtableEntry_t)&Hook_DurablesLicenseResult;
-
-    VirtualProtect(vt, sizeof(VtableEntry_t) * STORE_VTABLE_SIZE, old, &old);
-
-    LOG_INFO("9 hooks installed: vtable[15, 20, 21, 22, 25, 27, 29, 71, 72]");
+    ReleaseSRWLockExclusive(&g_hookLock);
 }

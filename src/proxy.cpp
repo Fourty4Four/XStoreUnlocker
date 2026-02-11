@@ -58,11 +58,11 @@ bool Proxy::EnsureInitialized() {
     return g_ok;
 }
 
-void Proxy::Shutdown() {
-    if (g_realDll) {
+void Proxy::Shutdown(bool processTerminating) {
+    if (g_realDll && !processTerminating) {
         FreeLibrary(g_realDll);
-        g_realDll = nullptr;
     }
+    g_realDll = nullptr;
 }
 
 QueryApiImpl_t          Proxy::GetReal_QueryApiImpl()          { return g_QueryApiImpl; }

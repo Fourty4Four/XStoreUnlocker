@@ -1,4 +1,4 @@
-// Store vtable hooks. Patches ownership and license checks on the XStore COM interface.
+// vtable hooks for XStore COM interface
 
 #pragma once
 
@@ -8,4 +8,5 @@
 namespace StoreHooks {
     void Initialize(const UnlockerConfig& cfg);
     void OnStoreInterfaceCreated(void** ppInterface);
+    void Shutdown();
 }

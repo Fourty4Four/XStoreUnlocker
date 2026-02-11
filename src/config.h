@@ -1,4 +1,4 @@
-// Configuration loaded from xstore_unlocker.ini.
+// config from xstore_unlocker.ini
 
 #pragma once
 

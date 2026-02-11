@@ -1,5 +1,5 @@
-// XStore type definitions. Reconstructed from XGameRuntime.dll via IDA.
-// 85-entry COM vtable dispatches all XStore API calls.
+// XStore types from xgameruntime.dll IDA analysis
+// 85 entry COM vtable for all XStore API calls
 
 #pragma once
 
@@ -8,10 +8,45 @@
 
 constexpr size_t STORE_VTABLE_SIZE = 85;
 
-// Generic vtable entry. All XStore methods use __fastcall (x64 default).
+constexpr size_t STORE_SKU_ID_SIZE           = 18;
+constexpr size_t IN_APP_OFFER_TOKEN_MAX_SIZE = 64;
+constexpr size_t TRIAL_UNIQUE_ID_MAX_SIZE    = 64;
+constexpr size_t PRICE_MAX_SIZE              = 16;
+
+constexpr uint32_t PRODUCT_KIND_DURABLE = 0x02;
+
+struct XStoreCanAcquireLicenseResult {
+    char     licensableSku[8];  // truncated to 8 not full STORE_SKU_ID_SIZE
+    uint32_t status;
+};
+static_assert(sizeof(XStoreCanAcquireLicenseResult) == 12, "XStoreCanAcquireLicenseResult size mismatch");
+
+struct XStoreGameLicense {
+    char     skuStoreId[STORE_SKU_ID_SIZE];
+    bool     isActive;
+    bool     isTrialOwnedByThisUser;
+    bool     isDiscLicense;
+    bool     isTrial;
+    uint8_t  _pad0[2];
+    uint32_t trialTimeRemainingInSeconds;
+    char     trialUniqueId[TRIAL_UNIQUE_ID_MAX_SIZE];
+    uint8_t  _pad1[4];
+    int64_t  expirationDate;
+};
+static_assert(sizeof(XStoreGameLicense) == 104, "XStoreGameLicense size mismatch");
+
+struct XStoreAddonLicense {
+    char     skuStoreId[STORE_SKU_ID_SIZE];
+    char     inAppOfferToken[IN_APP_OFFER_TOKEN_MAX_SIZE];
+    bool     isActive;
+    uint8_t  _pad0[5];
+    int64_t  expirationDate;
+};
+static_assert(sizeof(XStoreAddonLicense) == 96, "XStoreAddonLicense size mismatch");
+
 typedef int64_t(__fastcall* VtableEntry_t)(void*, ...);
 
-// Vtable index map. Derived from storeimpl.cpp debug strings in the binary.
+// vtable index map from storeimpl debug strings
 namespace StoreVtable {
     constexpr int QueryInterface                        = 0;
     constexpr int AddRef                                = 1;
@@ -80,9 +115,9 @@ namespace StoreVtable {
     constexpr int DownloadAndInstallPackagesCount         = 64;
     constexpr int RegisterPackageInstallMonitor           = 65;
     constexpr int RegisterGameLicenseChanged              = 66;
-    constexpr int RegisterPackageLicenseLost              = 67;
-    constexpr int UnregisterEvent                         = 68;
-    constexpr int RegisterPackageInstallProgress          = 69;
+    constexpr int UnregisterGameLicenseChanged            = 67;
+    constexpr int RegisterPackageLicenseLost              = 68;
+    constexpr int UnregisterPackageLicenseLost            = 69;
     constexpr int IsAvailabilityValid                     = 70;
     constexpr int AcquireLicenseForDurablesAsync          = 71;
     constexpr int AcquireLicenseForDurablesResult         = 72;
@@ -100,7 +135,7 @@ namespace StoreVtable {
     constexpr int UnregisterStorePackageUpdate            = 84;
 }
 
-// Export function signatures. Derived from IDA decompilation of XGameRuntime.dll.
+// export function signatures
 typedef HRESULT(__cdecl* QueryApiImpl_t)(const GUID*, const GUID*, void**);
 typedef HRESULT(__cdecl* InitializeApiImpl_t)(uint64_t, uint64_t);
 typedef HRESULT(__cdecl* InitializeApiImplEx_t)(uint64_t, uint64_t, int64_t);
