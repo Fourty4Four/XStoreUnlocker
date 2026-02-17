@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <Windows.h>
 
-// === Store vtable (85 entries) ===
+//TODO: dig a bit deeper into 83-84
 constexpr size_t STORE_VTABLE_SIZE = 85;
 
 constexpr size_t STORE_SKU_ID_SIZE           = 18;
@@ -297,3 +297,4 @@ typedef HRESULT(__cdecl* InitializeApiImplEx2_t)(uint64_t, uint64_t, int64_t, in
 typedef HRESULT(__cdecl* UninitializeApiImpl_t)(void);
 typedef HRESULT(__cdecl* DllCanUnloadNow_t)(void);
 typedef void(__cdecl* XErrorReport_t)(uint64_t, const char*);
+
