@@ -1,4 +1,4 @@
-// XStoreAPI Unlocker v2.0.1
+// XStoreAPI Unlocker v2.1.0
 // xgameruntime.dll proxy. rename original to XGameRuntime_o.dll
 
 #include "proxy.h"
@@ -7,10 +7,28 @@
 #include "logger.h"
 
 #include <string>
+#include <cstdio>
 #include <Windows.h>
 
 static HMODULE g_module = nullptr;
 static UnlockerConfig g_config;
+
+static std::string GuidToString(const GUID* g);
+
+static std::string GuidToString(const GUID* g) {
+    if (!g) return "(null)";
+    char buf[64] = {};
+    std::snprintf(
+        buf,
+        sizeof(buf),
+        "%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X",
+        g->Data1,
+        g->Data2,
+        g->Data3,
+        g->Data4[0], g->Data4[1], g->Data4[2], g->Data4[3],
+        g->Data4[4], g->Data4[5], g->Data4[6], g->Data4[7]);
+    return buf;
+}
 
 static std::string GetDllDirectory() {
     char path[MAX_PATH];
@@ -30,8 +48,31 @@ extern "C" __declspec(dllexport) HRESULT __cdecl QueryApiImpl(
     HRESULT hr = Proxy::GetReal_QueryApiImpl()(providerGuid, interfaceGuid, ppInterface);
 
     if (SUCCEEDED(hr) && ppInterface && *ppInterface) {
-        if (GuidsEqual(providerGuid, &XSTORE_PROVIDER_GUID)) {
+        const bool isStoreProvider = GuidsEqual(providerGuid, &XSTORE_PROVIDER_GUID);
+        const bool isPackageProvider = GuidsEqual(providerGuid, &XPACKAGE_PROVIDER_GUID);
+
+        if (isStoreProvider) {
+            static bool loggedOnce = false;
+            if (!loggedOnce) {
+                loggedOnce = true;
+                LOG_INFO("XStore interface created (provider=%s iface=%s out=%p)",
+                         GuidToString(providerGuid).c_str(),
+                         GuidToString(interfaceGuid).c_str(),
+                         *ppInterface);
+            }
             StoreHooks::OnStoreInterfaceCreated(ppInterface);
+        }
+
+        if (isPackageProvider) {
+            static bool loggedOnce = false;
+            if (!loggedOnce) {
+                loggedOnce = true;
+                LOG_INFO("XPackage interface created (provider=%s iface=%s out=%p)",
+                         GuidToString(providerGuid).c_str(),
+                         GuidToString(interfaceGuid).c_str(),
+                         *ppInterface);
+            }
+            PackageHooks::OnPackageInterfaceCreated(ppInterface);
         }
     }
 
@@ -83,19 +124,29 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved) {
 
         std::string dir = GetDllDirectory();
 
-        Logger::Instance().Init(dir + "\\xstore_unlocker.log");
-        LOG_INFO("XStoreAPI Unlocker v2.0.1");
-
         g_config = LoadConfig(dir + "\\xstore_unlocker.ini");
         Logger::Instance().SetEnabled(g_config.logEnabled);
+        if (g_config.logEnabled) {
+            Logger::Instance().Init(dir + "\\xstore_unlocker.log");
+            LOG_INFO("XStoreAPI Unlocker v2.1.0");
+            LOG_INFO("Config: unlock_all=%d, log_enabled=%d, blacklist=%zu, dlcs=%zu",
+                     g_config.unlockAll,
+                     g_config.logEnabled,
+                     g_config.blacklist.size(),
+                     g_config.dlcs.size());
+        }
 
         Proxy::SetOurModule(hModule);
         StoreHooks::Initialize(g_config);
+        PackageHooks::Initialize(g_config);
+        ComServerHooks::Initialize(g_config);
 
         LOG_INFO("Ready. Real DLL loads on first API call.");
         break;
     }
     case DLL_PROCESS_DETACH:
+        ComServerHooks::Shutdown();
+        PackageHooks::Shutdown();
         StoreHooks::Shutdown();
         Proxy::Shutdown(lpReserved != nullptr);
         break;

@@ -1,5 +1,4 @@
 #include "config.h"
-#include "logger.h"
 #include <Windows.h>
 
 static void WriteDefaultConfig(const std::string& path) {
@@ -8,7 +7,7 @@ static void WriteDefaultConfig(const std::string& path) {
     if (hFile == INVALID_HANDLE_VALUE) return;
 
     const char content[] =
-        "; XStoreAPI Unlocker v2.0.1\r\n"
+        "; XStoreAPI Unlocker v2.1.0\r\n"
         "; By ZephKek\r\n"
         "; Drop this file next to XGameRuntime.dll in the game folder.\r\n"
         "\r\n"
@@ -60,7 +59,6 @@ UnlockerConfig LoadConfig(const std::string& iniPath) {
     UnlockerConfig cfg;
 
     if (GetFileAttributesA(iniPath.c_str()) == INVALID_FILE_ATTRIBUTES) {
-        LOG_INFO("No config found. Writing default to %s", iniPath.c_str());
         WriteDefaultConfig(iniPath);
         return cfg;
     }
@@ -72,9 +70,6 @@ UnlockerConfig LoadConfig(const std::string& iniPath) {
 
     ReadSection("Blacklist", path, cfg.blacklist);
     ReadSection("DLCs", path, cfg.dlcs);
-
-    LOG_INFO("Config: unlock_all=%d, log_enabled=%d, blacklist=%zu, dlcs=%zu",
-        cfg.unlockAll, cfg.logEnabled, cfg.blacklist.size(), cfg.dlcs.size());
 
     return cfg;
 }

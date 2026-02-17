@@ -35,6 +35,7 @@ public:
     }
 
     void Error(const char* fmt, ...) {
+        if (!m_on) return;
         va_list a; va_start(a, fmt);
         Write("ERROR", fmt, a);
         va_end(a);
@@ -71,7 +72,7 @@ private:
 
     std::ofstream m_file;
     std::mutex m_mtx;
-    bool m_on = true;
+    bool m_on = false;
 };
 
 #define LOG_INFO(...)  Logger::Instance().Info(__VA_ARGS__)
