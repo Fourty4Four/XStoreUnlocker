@@ -98,7 +98,7 @@ constexpr size_t SKU_OFF_COLL_DEVOFFER  = 176;
 constexpr size_t SKU_OFF_AVAIL_COUNT    = 256;
 constexpr size_t SKU_OFF_AVAIL_PTR      = 264;
 
-constexpr int64_t FAKE_ACQUIRED = 133484064000000000LL;  // 2024-01-01 FILETIME
+constexpr int64_t FAKE_ACQUIRED = 133484064000000000LL;  // feel free to set to current this is set to 2024 
 constexpr int64_t FAKE_END      = 0x7FFFFFFFFFFFFFFELL;
 
 // Function pointer typedefs
@@ -1296,3 +1296,4 @@ void ComServerHooks::Shutdown() {
     }
     ReleaseSRWLockExclusive(&g_comHookLock);
 }
+
